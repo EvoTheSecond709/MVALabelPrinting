@@ -48,7 +48,7 @@ Built with **Python**, **Tkinter**, and **ReportLab**, with **silent PDF printin
 1. Clone the repository:
  ```bash
  git clone https://github.com/EvoTheSecond/MVALabelPrinting.git
- cd mva-label-printer
+ cd MVA-Label-Printing
  ```
 
 2. Install Python dependencies:
