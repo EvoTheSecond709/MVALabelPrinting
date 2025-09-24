@@ -18,15 +18,15 @@ except ImportError:
 
 APP_TITLE = "Mva Label Printing Software"
 
-# Print settings (PDF-only)
-SUMATRA_PRINTER_NAME: str | None = None
-SUMATRA_PAPER: str | None = None            # e.g., "Letter" to let Sumatra set host paper
-SUMATRA_SCALE: str = "fit"                  # "noscale", "fit", "shrink"
-SUMATRA_ORIENTATION: str | None = None      # "portrait", "landscape", or None
+# ==== Print settings (PDF-only) — Letter host page with centered 4×6 ====
+SUMATRA_PRINTER_NAME: str | None = None     # set to a Windows printer name or leave None for default
+SUMATRA_PAPER: str | None = "Letter"        # force the printer to use 8.5×11 media
+SUMATRA_SCALE: str = "noscale"              # do not let Sumatra rescale the page
+SUMATRA_ORIENTATION: str | None = "portrait"
 
-# Host page (when we wrap the 4x6 onto Letter/A4 ourselves)
+# Host page (we wrap 4×6 content onto an 8.5×11 page ourselves)
 HOST_PAPER_NAME: str = "Letter"
-HOST_SCALE_MODE: str = "fit"
+HOST_SCALE_MODE: str = "fit"                # keep our centering logic
 
 PERSIST_PDF_SECONDS: int = 25
 USE_SUMATRA_32BIT_FIRST: bool = True
@@ -216,14 +216,20 @@ class LabelRenderer:
 
     def render_pdf(self, code: str, description: str, out_path: str, host_wrap: bool, host_name: str, host_scale_mode: str):
         if not host_wrap:
+            # Native 4×6 page (not used for your Letter requirement)
             c = pdfcanvas.Canvas(out_path, pagesize=(self.content_w_pt, self.content_h_pt))
             self._draw_label_content(c, code, description); c.showPage(); c.save(); return
+
+        # Host wrap: draw the 4×6 content centered on a Letter page
         host_w, host_h = HOST_PAPER_SIZES.get(host_name, HOST_PAPER_SIZES["Letter"])
         c = pdfcanvas.Canvas(out_path, pagesize=(host_w, host_h))
-        host_margin_pt = 0.25 * inch
+
+        host_margin_pt = 0.25 * inch  # small white border so nothing is clipped
         avail_w = max(1, host_w - 2 * host_margin_pt)
         avail_h = max(1, host_h - 2 * host_margin_pt)
+
         cw, ch = self.content_w_pt, self.content_h_pt
+
         def best_fit(unrotated: bool):
             if unrotated:
                 s = min(avail_w / cw, avail_h / ch) if host_scale_mode == "fit" else 1.0
@@ -231,14 +237,21 @@ class LabelRenderer:
             else:
                 s = min(avail_w / ch, avail_h / cw) if host_scale_mode == "fit" else 1.0
                 return s, (host_w - ch*s)/2.0, (host_h - cw*s)/2.0, ch*s, cw*s
+
+        # Choose orientation that yields the larger placed rectangle; both remain centered.
         s0, x0, y0, w0, h0 = best_fit(True)
         s1, x1, y1, w1, h1 = best_fit(False)
         rotate = (w1 * h1) > (w0 * h0)
+
         if not rotate:
-            c.saveState(); c.translate(x0, y0); c.scale(s0, s0); self._draw_label_content(c, code, description); c.restoreState()
+            c.saveState(); c.translate(x0, y0); c.scale(s0, s0)
+            self._draw_label_content(c, code, description)
+            c.restoreState()
         else:
             c.saveState(); c.translate(x1, y1); c.rotate(90); c.translate(0, -cw * s1); c.scale(s1, s1)
-            self._draw_label_content(c, code, description); c.restoreState()
+            self._draw_label_content(c, code, description)
+            c.restoreState()
+
         c.showPage(); c.save()
 
 # ---------- Helpers: DPI, AppID, Icon ----------
@@ -574,13 +587,13 @@ class App(tk.Tk):
         if USE_SUMATRA_32BIT_FIRST:
             cands += [ _resource_path("assets/SumatraPDF-32.exe"),
                        _resource_path("assets/SumatraPDF.exe"),
-                       r"C:\\Program Files (x86)\\SumatraPDF\\SumatraPDF.exe",
-                       r"C:\\Program Files\\SumatraPDF\\SumatraPDF.exe" ]
+                       r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe",
+                       r"C:\Program Files\SumatraPDF\SumatraPDF.exe" ]
         else:
             cands += [ _resource_path("assets/SumatraPDF.exe"),
                        _resource_path("assets/SumatraPDF-32.exe"),
-                       r"C:\\Program Files\\SumatraPDF\\SumatraPDF.exe",
-                       r"C:\\Program Files (x86)\\SumatraPDF\\SumatraPDF.exe" ]
+                       r"C:\Program Files\SumatraPDF\SumatraPDF.exe",
+                       r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe" ]
         for p in cands:
             if os.path.isfile(p): return p
         return None
@@ -588,7 +601,12 @@ class App(tk.Tk):
     def _silent_print_pdf(self, pdf_path: str, copies: int) -> bool:
         sp = self._find_sumatra()
         if not sp:
-            self.status_var.set("SumatraPDF not found."); return False
+            messagebox.showerror(
+                "SumatraPDF not found",
+                "The bundled SumatraPDF executable was not found.\n"
+                "Please ensure assets/SumatraPDF.exe (or SumatraPDF-32.exe) is included in the build."
+            )
+            return False
 
         base_settings = []
         if SUMATRA_PAPER:
@@ -604,17 +622,17 @@ class App(tk.Tk):
             args += ["-print-to", SUMATRA_PRINTER_NAME] if SUMATRA_PRINTER_NAME else ["-print-to-default"]
             if settings_str:
                 args += ["-print-settings", settings_str]
-            args += [pdf_path]
+            args += [pdf_path, "-silent", "-exit-on-print"]
             try:
                 subprocess.Popen(
-                    args + ["-silent", "-exit-on-print"],
+                    args,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     creationflags=0x08000000,  # CREATE_NO_WINDOW
                 )
                 return 0
             except Exception as e:
-                self.status_var.set(f"Sumatra print failed: {e}")
+                messagebox.showerror("Sumatra print failed", f"Could not launch SumatraPDF:\n{e}")
                 return 1
 
         c = max(1, int(copies or 1))
@@ -644,18 +662,17 @@ class App(tk.Tk):
             pdf_path = tmp.name
 
         try:
-            host_wrap = (SUMATRA_PAPER is None)
+            # Always wrap onto Letter so output is a single 8.5×11 page with centered 4×6 content
+            host_wrap = True
             self.renderer.render_pdf(row.name, row.description, pdf_path,
                                      host_wrap=host_wrap, host_name=HOST_PAPER_NAME, host_scale_mode=HOST_SCALE_MODE)
 
+            # Sumatra-only silent print (no shell fallback)
             sent = self._silent_print_pdf(pdf_path, copies)
             if not sent:
-                # Fallback: shell print (not silent)
-                for _ in range(copies):
-                    try:
-                        os.startfile(pdf_path, "print")  # type: ignore[attr-defined]
-                    except Exception:
-                        subprocess.Popen(["cmd", "/c", "start", "", pdf_path])
+                try: os.remove(pdf_path)
+                except Exception: pass
+                return
 
             def _cleanup():
                 deadline = time.time() + max(PERSIST_PDF_SECONDS, 25)
@@ -668,7 +685,7 @@ class App(tk.Tk):
                 except Exception: pass
 
             threading.Timer(25, _cleanup).start()
-            self.status_var.set("Sent to printer (PDF).")
+            self.status_var.set("Sent to printer (Letter page via Sumatra, silent).")
         except Exception as e:
             messagebox.showerror("Print error", f"Failed to print: {e}")
             try: os.remove(pdf_path)
