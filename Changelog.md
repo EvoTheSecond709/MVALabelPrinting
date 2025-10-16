@@ -4,7 +4,9 @@
 ### Added
 - Scrap support for labels
 - Printer selection support (choose printer at runtime)
+- Editing in admin menu support
 
 ### Fixed
 - Corrected output orientation from 4×6 to 8.5×11
 - Switched password storage from plain text to hashed values
+- Changed Print (crtl-p) to just print
