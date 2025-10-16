@@ -143,6 +143,17 @@ class LabelDB:
             con.commit()
             return cur.rowcount
 
+    # NEW: update existing label (for double-click edit)
+    def update_label(self, id_: int, name: str, description: str) -> bool:
+        with self._connect() as con:
+            cur = con.cursor()
+            cur.execute(
+                "UPDATE labels SET name = ?, description = ? WHERE id = ?",
+                (name.strip(), description.strip(), id_),
+            )
+            con.commit()
+            return cur.rowcount > 0
+
 # ---------- PDF Renderer ----------
 class LabelRenderer:
     def __init__(self, width_in: float, height_in: float, margin_in: float):
@@ -550,6 +561,44 @@ class App(tk.Tk):
         messagebox.showinfo("Saved", f"Added label: {code}")
         win.destroy()
 
+    # NEW: open edit window (same layout as Add), with optional callback to refresh list
+    def _open_edit_label(self, row: LabelRow, after_save=None):
+        win = tk.Toplevel(self); win.title(f"Edit Label — {row.name}"); win.geometry("560x380"); win.grab_set(); _load_app_icon(win)
+        frm = ttk.Frame(win, padding=12); frm.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text="Label code (e.g., VG0100)").grid(row=0, column=0, sticky="w")
+        code_var = tk.StringVar(value=row.name)
+        code_entry = ttk.Entry(frm, textvariable=code_var, width=44)
+        code_entry.grid(row=1, column=0, sticky="we", pady=(0,10)); code_entry.focus_set()
+        ttk.Label(frm, text="Description (multi-line)").grid(row=2, column=0, sticky="w")
+        desc_txt = tk.Text(frm, height=10, wrap=tk.WORD, font=("Segoe UI", 10))
+        desc_txt.grid(row=3, column=0, sticky="nsew"); frm.rowconfigure(3, weight=1); frm.columnconfigure(0, weight=1)
+        desc_txt.insert("1.0", row.description)
+        btns = ttk.Frame(frm); btns.grid(row=4, column=0, sticky="e", pady=(12,0))
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=(0,8))
+        ttk.Button(btns, text="Save Changes", command=lambda: self._save_edit_label(row.id, code_var, desc_txt, win, after_save)).pack(side=tk.RIGHT)
+
+    # NEW: save edit and refresh combobox + optionally the list
+    def _save_edit_label(self, id_: int, code_var, desc_txt, win, after_save=None):
+        code = (code_var.get() or "").strip()
+        desc = (desc_txt.get("1.0", tk.END) or "").strip()
+        if not code:
+            messagebox.showwarning("Required", "Please enter a label code."); return
+        if not desc:
+            messagebox.showwarning("Required", "Please enter a description."); return
+        try:
+            updated = self.db.update_label(id_, code, desc)
+        except sqlite3.IntegrityError:
+            messagebox.showerror("Duplicate", f"Another label already uses the name '{code}'."); return
+        if updated:
+            self._reload_labels()
+            if callable(after_save):
+                try: after_save()
+                except Exception: pass
+            messagebox.showinfo("Updated", f"Updated label: {code}")
+            win.destroy()
+        else:
+            messagebox.showerror("Error", "Failed to update label.")
+
     def _open_view_list(self):
         win = tk.Toplevel(self); win.title("Current Labels — View / Delete"); win.geometry("1000x640"); win.grab_set(); _load_app_icon(win)
         outer = ttk.Frame(win, padding=12); outer.pack(fill=tk.BOTH, expand=True)
@@ -601,6 +650,21 @@ class App(tk.Tk):
             if event.keysym == "Delete":
                 delete_selected()
         tree.bind("<Key>", on_key)
+
+        # NEW: double-click to edit using the same Add window layout
+        def on_double_click(event):
+            item = tree.identify_row(event.y)
+            if not item:
+                return
+            try:
+                # iid is the id; values[0] is name; use name to fetch the full row
+                name = tree.item(item, "values")[0]
+            except Exception:
+                return
+            row = self.db.get_label_by_name(str(name))
+            if row:
+                self._open_edit_label(row, after_save=refresh)
+        tree.bind("<Double-1>", on_double_click)
 
         refresh()
 
