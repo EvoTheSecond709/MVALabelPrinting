@@ -433,14 +433,14 @@ class App(tk.Tk):
         self._refresh_scrap_button_text()
         self.scrap_btn.pack(side=tk.LEFT, padx=(0, 14))
 
+        # Actions
+        ttk.Button(top, text="Print (Ctrl+P)", command=self._print_selected).pack(side=tk.LEFT, padx=(0,10))
+        ttk.Button(top, text="Admin", command=self._admin_login).pack(side=tk.LEFT)
+       
         # Printer dropdown (Windows)
         ttk.Label(top, text="Printer:").pack(side=tk.LEFT)
         self.printer_combo = ttk.Combobox(top, textvariable=self.printer_var, state="readonly", width=34)
         self.printer_combo.pack(side=tk.LEFT, padx=(6, 14))
-
-        # Actions
-        ttk.Button(top, text="Print (Ctrl+P)", command=self._print_selected).pack(side=tk.LEFT, padx=(0,10))
-        ttk.Button(top, text="Admin", command=self._admin_login).pack(side=tk.LEFT)
 
         mid = ttk.Frame(self); mid.pack(fill=tk.BOTH, expand=True, padx=pad, pady=0)
 
