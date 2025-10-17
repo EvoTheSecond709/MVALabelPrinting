@@ -39,9 +39,7 @@ Built with **Python**, **Tkinter**, and **ReportLab**, with **silent PDF printin
 - **Admin Panel** (password protected)
   - Add single label.
   - Bulk import from pasted lines.
-  - View/search/delete labels.
-- **Friendly UI**
-  - Read-only dropdown, copy selector, `Ctrl+P` shortcut.
+  - View/search/delete/edit labels.
 
 ## 📦 Installation
 
