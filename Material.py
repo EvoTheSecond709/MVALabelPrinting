@@ -17,7 +17,7 @@ try:
 except ImportError:
     Image = ImageDraw = ImageFont = ImageTk = None
 
-APP_TITLE = "Mva Label Printing Software"
+APP_TITLE = "Label Printing Software"
 
 # ==== Print settings (PDF-only) — Letter host page with centered 4×6 ====
 SUMATRA_PRINTER_NAME: str | None = None     # legacy fallback if UI can't list printers
@@ -161,8 +161,11 @@ class LabelRenderer:
         self.content_h_pt = int(height_in * inch)
         self.margin_pt = int(margin_in * inch)
         self.code_side_margin_pt = int(CODE_SIDE_MARGIN_IN * inch)
-        self.code_font_name = "Helvetica-Bold"
-        self.desc_font_name = "Helvetica"
+        # All printing in Times family
+        self.code_font_name = "Times-Bold"
+        self.desc_font_name = "Times-Roman"
+        # NEW: track whether Regrind is active (affects both preview & PDF)
+        self.regrind_active: bool = False
 
     def _fit_font(self, canv, text, target_width, max_size, min_size=18) -> int:
         size = max_size
@@ -204,7 +207,7 @@ class LabelRenderer:
     def _draw_label_content(self, c, code: str, description: str, scrap: bool = False):
         w, h, m = self.content_w_pt, self.content_h_pt, self.margin_pt
 
-        # Code
+        # Code (Times-Bold)
         max_code_width = w - (2 * self.code_side_margin_pt)
         code_size = self._fit_font(c, code, max_code_width, CODE_FONT_SIZE, min_size=28)
         c.setFont(self.code_font_name, code_size)
@@ -218,19 +221,18 @@ class LabelRenderer:
         c.setLineWidth(UNDERLINE_STROKE_PT)
         c.line(code_x - code_text_width / 2.0, underline_y, code_x + code_text_width / 2.0, underline_y)
 
-        # Optional SCRAP (same format as code), placed below the code's underline
+        # Optional SCRAP/REGRIND (Times-Bold)
         if scrap:
-            scrap_text = "Scrap"
+            secondary_text = "Regrind" if self.regrind_active else "Scrap"
             c.setFont(self.code_font_name, code_size)
-            scrap_x = code_x
-            scrap_baseline = underline_y - (UNDERLINE_GAP_PT + 0.80 * code_size)
-            c.drawCentredString(scrap_x, scrap_baseline, scrap_text)
-            # underline for scrap text
-            scrap_text_width = c.stringWidth(scrap_text, self.code_font_name, code_size)
-            scrap_ul_y = scrap_baseline - UNDERLINE_GAP_PT
-            c.line(scrap_x - scrap_text_width / 2.0, scrap_ul_y, scrap_x + scrap_text_width / 2.0, scrap_ul_y)
+            secondary_x = code_x
+            secondary_baseline = underline_y - (UNDERLINE_GAP_PT + 0.80 * code_size)
+            c.drawCentredString(secondary_x, secondary_baseline, secondary_text)
+            secondary_text_width = c.stringWidth(secondary_text, self.code_font_name, code_size)
+            secondary_ul_y = secondary_baseline - UNDERLINE_GAP_PT
+            c.line(secondary_x - secondary_text_width / 2.0, secondary_ul_y, secondary_x + secondary_text_width / 2.0, secondary_ul_y)
 
-        # Description
+        # Description (Times-Roman)
         block_w = w - 2 * m
         max_desc_height = (h * DESC_TOP_FRACTION) - m
         desc_size, lines = self._fit_paragraph(c, description, block_w, max_desc_height)
@@ -250,7 +252,7 @@ class LabelRenderer:
         # Host wrap: draw the 4×6 content centered on a Letter page
         host_w, host_h = HOST_PAPER_SIZES.get(host_name, HOST_PAPER_SIZES["Letter"])
         c = pdfcanvas.Canvas(out_path, pagesize=(host_w, host_h))
-        host_margin_pt = 0.25 * inch  # small white border so nothing is clipped
+        host_margin_pt = 0.25 * inch
         avail_w = max(1, host_w - 2 * host_margin_pt)
         avail_h = max(1, host_h - 2 * host_margin_pt)
         cw, ch = self.content_w_pt, self.content_h_pt
@@ -314,63 +316,87 @@ def _load_app_icon(root: tk.Tk):
         pass
 
 # ---------- Windows printer discovery ----------
+# ---------- Windows printer discovery ----------
+def _get_default_printer_windows() -> Optional[str]:
+    """Return the system default printer name using the WinSpool API (Windows only)."""
+    if platform.system().lower() != "windows":
+        return None
+    try:
+        from ctypes import wintypes
+        winspool = ctypes.WinDLL("winspool.drv")
+        GetDefaultPrinterW = winspool.GetDefaultPrinterW
+        GetDefaultPrinterW.argtypes = [wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        GetDefaultPrinterW.restype = wintypes.BOOL
+
+        needed = wintypes.DWORD(0)
+        GetDefaultPrinterW(None, ctypes.byref(needed))
+        if needed.value == 0:
+            return None
+
+        buf = ctypes.create_unicode_buffer(needed.value)
+        if GetDefaultPrinterW(buf, ctypes.byref(needed)):
+            return buf.value.strip() or None
+    except Exception:
+        return None
+    return None
+
+
 def _list_windows_printers() -> tuple[list[str], Optional[str]]:
     """
     Returns (printers, default_printer_name). Safe on non-Windows (returns [], None).
-    Tries PowerShell first (preferred), then WMIC, then returns empties.
+    Uses PowerShell/WMIC with fallback to native WinSpool default.
     """
     if platform.system().lower() != "windows":
         return [], None
 
-    # Try PowerShell Get-Printer
+    default_name = _get_default_printer_windows()
+    printers: list[str] = []
+
+    # PowerShell: list printer names
     try:
         ps_cmd = [
             "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "Get-Printer | Select-Object Name, Default | ConvertTo-Csv -NoTypeInformation"
+            "Get-Printer | Select-Object Name | ConvertTo-Csv -NoTypeInformation"
         ]
         out = subprocess.check_output(ps_cmd, stderr=subprocess.DEVNULL, creationflags=0x08000000)
         lines = out.decode("utf-8", errors="ignore").splitlines()
-        printers, default_name = [], None
-        # CSV header: "Name","Default"
         for line in lines[1:]:
-            if not line.strip():
-                continue
-            # naive CSV split that works here (no commas in typical printer names)
-            parts = [p.strip().strip('"') for p in line.split(",")]
-            if len(parts) >= 2:
-                name, is_default = parts[0], parts[1]
+            name = line.strip().strip('"')
+            if name:
                 printers.append(name)
-                if is_default.lower() == "true":
-                    default_name = name
-        if printers:
-            return printers, default_name
     except Exception:
         pass
 
-    # Fallback to WMIC (older but widely available)
-    try:
-        out = subprocess.check_output(["wmic", "printer", "get", "Name,Default"], stderr=subprocess.DEVNULL, creationflags=0x08000000)
-        lines = out.decode("utf-8", errors="ignore").splitlines()
-        printers, default_name = [], None
-        # Skip header; parse columns by spacing
-        for line in lines[1:]:
-            s = line.strip()
-            if not s:
-                continue
-            # WMIC aligns columns; last token is often Default; name is the rest
-            parts = s.rsplit(" ", 1)
-            if len(parts) == 2:
-                name, is_def = parts[0].rstrip(), parts[1].strip()
-                name = name.strip()
-                printers.append(name)
-                if is_def == "TRUE":
-                    default_name = name
-        if printers:
-            return printers, default_name
-    except Exception:
-        pass
+    # WMIC fallback
+    if not printers:
+        try:
+            out = subprocess.check_output(["wmic", "printer", "get", "Name"], stderr=subprocess.DEVNULL, creationflags=0x08000000)
+            for line in out.decode("utf-8", errors="ignore").splitlines()[1:]:
+                name = line.strip()
+                if name:
+                    printers.append(name)
+        except Exception:
+            pass
 
-    return [], None
+    # Try to detect default via PowerShell if WinSpool didn’t work
+    if not default_name:
+        try:
+            ps_cmd = [
+                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "(Get-Printer | Where-Object {$_.Default -eq $true}).Name"
+            ]
+            out = subprocess.check_output(ps_cmd, stderr=subprocess.DEVNULL, creationflags=0x08000000)
+            guess = out.decode("utf-8", errors="ignore").strip()
+            if guess:
+                default_name = guess
+        except Exception:
+            pass
+
+    if not default_name and printers:
+        default_name = printers[0]
+
+    return printers, default_name
+
 
 # ---------- App ----------
 class App(tk.Tk):
@@ -381,6 +407,7 @@ class App(tk.Tk):
         self.geometry("1100x700")
         self.minsize(1000, 650)
         self.resizable(True, True)
+        self.configure(bg="#f3f3f3")
         _load_app_icon(self)
 
         self.style = ttk.Style()
@@ -392,15 +419,16 @@ class App(tk.Tk):
         # UI state vars
         self.label_var = tk.StringVar()
         self.copies_var = tk.IntVar(value=1)
-        self.scrap_var = tk.BooleanVar(value=False)  # logical state for scrap
-        self.printer_var = tk.StringVar()            # selected printer name
+        self.scrap_var = tk.BooleanVar(value=False)   # logical state for scrap
+        self.regrind_var = tk.BooleanVar(value=False) # logical state for regrind
+        self.printer_var = tk.StringVar()             # selected printer name
         self.printers: list[str] = []
         self.default_printer: Optional[str] = None
 
         self._build_ui()
         self._bind_shortcuts()
 
-        # Load printers (Windows only); harmless no-op on other OS
+        # Load printers (Windows only); harmless on other OS
         self._load_printers_into_ui()
 
         self._reload_labels()
@@ -410,64 +438,103 @@ class App(tk.Tk):
             style.theme_use("clam")
         except Exception:
             pass
-        style.configure("TFrame", padding=0)
-        style.configure("TLabel", font=("Segoe UI", 10))
-        style.configure("Treeview", rowheight=26)
-        style.configure("Treeview.Heading", font=("Segoe UI Semibold", 10))
-        style.configure("Card.TLabelframe.Label", font=("Segoe UI Semibold", 10))
-        style.configure("Status.TLabel", foreground="#555")
-
-        # Flat pill-style toggle for Scrap ☑/☐
-        style.configure("Scrap.TButton", padding=(8, 2))
+        # Base fonts to generic family label (UI only)
+        base_font = ("sans-serif typefaces", 11)
+        base_font_b = ("sans-serif typefaces", 11, "bold")
+        style.configure("TFrame", padding=0, background="#f3f3f3")
+        style.configure("TLabel", font=base_font, background="#f3f3f3")
+        style.configure("Treeview", rowheight=26, font=base_font)
+        style.configure("Treeview.Heading", font=base_font_b)
+        style.configure("Card.TLabelframe", background="#ffffff")
+        style.configure("Card.TLabelframe.Label", font=base_font_b, background="#ffffff")
+        style.configure("Status.TLabel", foreground="#555", background="#f3f3f3", font=("sans-serif typefaces", 10))
+        style.configure("TButton", font=base_font, padding=(10, 6))
+        style.map("TButton", relief=[("active", "groove")])
+        style.configure("TEntry", padding=4)
+        style.configure("TCombobox", padding=4)
+        # Flat pill-style toggles
+        style.configure("Scrap.TButton", padding=(8, 2), font=base_font)
 
     def _build_ui(self):
         pad = 12
 
-        header = ttk.Frame(self); header.pack(fill=tk.X, padx=pad, pady=(pad, 8))
-        ttk.Label(header, text=APP_TITLE, font=("Segoe UI Semibold", 14)).pack(side=tk.LEFT)
+        # ----- Header line: Title (left), Banner (center on Canvas), Admin (right) -----
+        header = ttk.Frame(self)
+        header.pack(fill=tk.X, padx=pad, pady=(pad, 8))
 
-        top = ttk.Frame(self); top.pack(fill=tk.X, padx=pad, pady=(0, 10))
+        # Canvas for banner (center)
+        banner_canvas = tk.Canvas(header, width=600, height=80, bg="#f3f3f3", highlightthickness=0)
+        banner_canvas.pack(side=tk.LEFT, expand=True, padx=10)
+
+        banner_path = _resource_path("assets/banner.png")
+        if os.path.exists(banner_path):
+            banner_img = tk.PhotoImage(file=banner_path)
+            banner_canvas.banner_img = banner_img  # prevent garbage collection
+            banner_canvas.create_image(300, 40, image=banner_img, anchor="center")
+        else:
+            messagebox.showwarning("Banner Missing", f"Couldn't find: {banner_path}")
+
+        # Right Admin button
+        ttk.Button(header, text="Admin", command=self._admin_login).pack(side=tk.RIGHT, padx=(0, 10))
+
+        # ----- Top control bar -----
+        top = ttk.Frame(self)
+        top.pack(fill=tk.X, padx=pad, pady=(0, 10))
 
         # Material
-        ttk.Label(top, text="Material:").pack(side=tk.LEFT, padx=(0,6))
-        self.combo = ttk.Combobox(top, textvariable=self.label_var, state="readonly", width=50, height=15)
+        ttk.Label(top, text="Material:").pack(side=tk.LEFT, padx=(0, 6))
+        self.combo = ttk.Combobox(top, textvariable=self.label_var, state="normal", width=30)
         self.combo.pack(side=tk.LEFT, padx=(0, 10))
+        self.combo.bind("<Return>", self._on_material_search)
         self.combo.bind("<<ComboboxSelected>>", lambda e: self._on_selection())
 
         # Copies
         ttk.Label(top, text="Copies:").pack(side=tk.LEFT)
-        self.copies_spin = ttk.Spinbox(top, from_=1, to=999, width=5, textvariable=self.copies_var, justify="center")
+        self.copies_spin = ttk.Spinbox(top, from_=1, to=999, width=5,
+                                       textvariable=self.copies_var, justify="center")
         self.copies_spin.pack(side=tk.LEFT, padx=(6, 12))
 
-        # Scrap toggle (☑ / ☐) — replaces default checkbox so it never shows an X
+        # Scrap toggle
         self.scrap_btn = ttk.Button(top, style="Scrap.TButton", command=self._toggle_scrap)
         self._refresh_scrap_button_text()
-        self.scrap_btn.pack(side=tk.LEFT, padx=(0, 14))
+        self.scrap_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        # Actions
-        ttk.Button(top, text="Print (Ctrl+P)", command=self._print_selected).pack(side=tk.LEFT, padx=(0,10))
-        ttk.Button(top, text="Admin", command=self._admin_login).pack(side=tk.LEFT)
-       
+        # Regrind toggle
+        self.regrind_btn = ttk.Button(top, style="Scrap.TButton", command=self._toggle_regrind)
+        self._refresh_regrind_button_text()
+        self.regrind_btn.pack(side=tk.LEFT, padx=(0, 14))
+
+        # Print
+        ttk.Button(top, text="Print (Ctrl+P)", command=self._print_selected).pack(side=tk.LEFT, padx=(0, 50))
+
         # Printer dropdown (Windows)
         ttk.Label(top, text="Printer:").pack(side=tk.LEFT)
         self.printer_combo = ttk.Combobox(top, textvariable=self.printer_var, state="readonly", width=34)
         self.printer_combo.pack(side=tk.LEFT, padx=(6, 14))
 
-        mid = ttk.Frame(self); mid.pack(fill=tk.BOTH, expand=True, padx=pad, pady=0)
+        # ----- Preview and right panel -----
+        mid = ttk.Frame(self)
+        mid.pack(fill=tk.BOTH, expand=True, padx=pad, pady=0)
 
         prev_card = ttk.Labelframe(mid, text="Print Preview", style="Card.TLabelframe")
-        prev_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 10), pady=(0,8))
-        prev_frame = ttk.Frame(prev_card); prev_frame.pack(padx=10, pady=10)
+        prev_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 10), pady=(0, 8))
+        prev_frame = ttk.Frame(prev_card)
+        prev_frame.pack(padx=10, pady=10)
         self.preview_w, self.preview_h = 380, 570
         self.preview_canvas = tk.Canvas(prev_frame, width=self.preview_w, height=self.preview_h, bg="white",
                                         highlightthickness=1, highlightbackground="#ddd")
         self.preview_canvas.pack()
 
-        right = ttk.Frame(mid); right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=(0,8))
-        # (You can add future right-pane content here)
+        right = ttk.Frame(mid)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=(0, 8))
+        # (future right-pane content)
 
         self.status_var = tk.StringVar(value="Ready.")
-        ttk.Label(self, textvariable=self.status_var, anchor="w", style="Status.TLabel").pack(fill=tk.X, padx=pad, pady=(6, pad))
+        ttk.Label(self, textvariable=self.status_var, anchor="w", style="Status.TLabel").pack(
+            fill=tk.X, padx=pad, pady=(6, pad)
+        )
+
+
 
     def _bind_shortcuts(self):
         self.bind_all("<Control-p>", lambda e: self._print_selected())
@@ -475,14 +542,35 @@ class App(tk.Tk):
 
     # ----- Scrap control helpers -----
     def _refresh_scrap_button_text(self):
-        # Always a check mark, never an 'X'
         self.scrap_btn.config(text=("☑ Scrap" if self.scrap_var.get() else "☐ Scrap"))
 
     def _toggle_scrap(self):
         self.scrap_var.set(not self.scrap_var.get())
         self._refresh_scrap_button_text()
-        # re-render preview if a label is selected
-        self._on_scrap_toggle()
+        self._on_any_toggle()
+
+    # ----- Regrind control helpers -----
+    def _refresh_regrind_button_text(self):
+        self.regrind_btn.config(text=("☑ Regrind" if self.regrind_var.get() else "☐ Regrind"))
+
+    def _toggle_regrind(self):
+        self.regrind_var.set(not self.regrind_var.get())
+        self._refresh_regrind_button_text()
+        self._on_any_toggle()
+
+    def _on_any_toggle(self):
+        name = (self.label_var.get() or "").strip()
+        if not name:
+            return
+        row = self.db.get_label_by_name(name)
+        if row:
+            # Propagate regrind state to renderer and preview
+            self.renderer.regrind_active = self.regrind_var.get()
+            self._render_preview(
+                row.name,
+                row.description,
+                scrap=(self.scrap_var.get() or self.regrind_var.get())
+            )
 
     # ----- Printer discovery & UI -----
     def _load_printers_into_ui(self):
@@ -492,13 +580,11 @@ class App(tk.Tk):
 
         if printers:
             self.printer_combo["values"] = tuple(printers)
-            # Prefer actual default; else previous global setting; else first entry
             initial = default_name or SUMATRA_PRINTER_NAME or printers[0]
             self.printer_var.set(initial)
         else:
-            # Hide/disable when not on Windows or no printers found
             self.printer_combo["values"] = ()
-            self.printer_var.set("")  # means "use default" when printing
+            self.printer_var.set("")  # use default when printing
 
     # ----- Data ops -----
     def _reload_labels(self):
@@ -513,7 +599,27 @@ class App(tk.Tk):
             self.combo.set("")
             self.preview_canvas.delete("all")
             self.status_var.set("No labels yet.")
+#------ Testing -------
+    def _on_material_search(self, event):
+        # Allow user typing in the combo
+        text = self.label_var.get().strip().upper()
+        if not text:
+            return
 
+        def normalize(s: str) -> str:
+            import re
+            match = re.match(r"([A-Za-z]+)0*(\d+)", s)
+            if match:
+                prefix, digits = match.groups()
+                return f"{prefix}{int(digits)}"  # remove leading zeros
+            return s
+
+        # Find the first label that matches ignoring leading zeros
+        for name in self.combo["values"]:
+            if normalize(name.upper()) == normalize(text):
+                self.combo.set(name)
+                self._on_selection()
+                return
     # ----- Admin -----
     def _admin_login(self):
         pw = simpledialog.askstring("Admin Login", "Enter admin password:", show='*', parent=self)
@@ -528,7 +634,7 @@ class App(tk.Tk):
     def _open_admin_panel(self):
         win = tk.Toplevel(self); win.title("Admin Panel"); win.geometry("400x320"); win.grab_set(); _load_app_icon(win)
         frm = ttk.Frame(win, padding=12); frm.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(frm, text="Admin actions", font=("Segoe UI Semibold", 11)).pack(anchor="w", pady=(0, 8))
+        ttk.Label(frm, text="Admin actions", font=("sans-serif typefaces", 12, "bold")).pack(anchor="w", pady=(0, 8))
         ttk.Button(frm, text="Add Single Label", command=self._open_add_single).pack(fill=tk.X, pady=6)
         ttk.Button(frm, text="View / Delete Labels", command=self._open_view_list).pack(fill=tk.X, pady=6)
         ttk.Button(frm, text="Bulk Import Labels", command=self._open_bulk_import).pack(fill=tk.X, pady=6)
@@ -540,7 +646,7 @@ class App(tk.Tk):
         code_var = tk.StringVar(); code_entry = ttk.Entry(frm, textvariable=code_var, width=44)
         code_entry.grid(row=1, column=0, sticky="we", pady=(0,10)); code_entry.focus_set()
         ttk.Label(frm, text="Description (multi-line)").grid(row=2, column=0, sticky="w")
-        desc_txt = tk.Text(frm, height=10, wrap=tk.WORD, font=("Segoe UI", 10))
+        desc_txt = tk.Text(frm, height=10, wrap=tk.WORD, font=("sans-serif typefaces", 10))
         desc_txt.grid(row=3, column=0, sticky="nsew"); frm.rowconfigure(3, weight=1); frm.columnconfigure(0, weight=1)
         btns = ttk.Frame(frm); btns.grid(row=4, column=0, sticky="e", pady=(12,0))
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=(0,8))
@@ -570,7 +676,7 @@ class App(tk.Tk):
         code_entry = ttk.Entry(frm, textvariable=code_var, width=44)
         code_entry.grid(row=1, column=0, sticky="we", pady=(0,10)); code_entry.focus_set()
         ttk.Label(frm, text="Description (multi-line)").grid(row=2, column=0, sticky="w")
-        desc_txt = tk.Text(frm, height=10, wrap=tk.WORD, font=("Segoe UI", 10))
+        desc_txt = tk.Text(frm, height=10, wrap=tk.WORD, font=("sans-serif typefaces", 10))
         desc_txt.grid(row=3, column=0, sticky="nsew"); frm.rowconfigure(3, weight=1); frm.columnconfigure(0, weight=1)
         desc_txt.insert("1.0", row.description)
         btns = ttk.Frame(frm); btns.grid(row=4, column=0, sticky="e", pady=(12,0))
@@ -651,13 +757,12 @@ class App(tk.Tk):
                 delete_selected()
         tree.bind("<Key>", on_key)
 
-        # NEW: double-click to edit using the same Add window layout
+        # NEW: double-click to edit
         def on_double_click(event):
             item = tree.identify_row(event.y)
             if not item:
                 return
             try:
-                # iid is the id; values[0] is name; use name to fetch the full row
                 name = tree.item(item, "values")[0]
             except Exception:
                 return
@@ -672,7 +777,7 @@ class App(tk.Tk):
         win = tk.Toplevel(self); win.title("Bulk Import Labels"); win.geometry("780x560"); win.grab_set(); _load_app_icon(win)
         outer = ttk.Frame(win, padding=12); outer.pack(fill=tk.BOTH, expand=True)
         ttk.Label(outer, text="Paste lines like: VG0100 Description here").pack(anchor="w", pady=(0,6))
-        txt = tk.Text(outer, wrap=tk.NONE, font=("Segoe UI", 10)); txt.pack(fill=tk.BOTH, expand=True)
+        txt = tk.Text(outer, wrap=tk.NONE, font=("sans-serif typefaces", 10)); txt.pack(fill=tk.BOTH, expand=True)
         ttk.Button(outer, text="Import", command=lambda: do_import()).pack(pady=10, anchor="e")
 
         def do_import():
@@ -707,70 +812,34 @@ class App(tk.Tk):
             return
         row = self.db.get_label_by_name(name)
         if row:
-            self._render_preview(row.name, row.description, scrap=self.scrap_var.get())
+            # ensure renderer knows current regrind state
+            self.renderer.regrind_active = self.regrind_var.get()
+            self._render_preview(row.name, row.description, scrap=(self.scrap_var.get() or self.regrind_var.get()))
             self.status_var.set(f"Loaded: {row.name}")
-
-    def _on_scrap_toggle(self):
-        name = (self.label_var.get() or "").strip()
-        if not name:
-            return
-        row = self.db.get_label_by_name(name)
-        if row:
-            self._render_preview(row.name, row.description, scrap=self.scrap_var.get())
-
-    def _pick_font(self, size: int, bold: bool = False):
-        if ImageFont is None:
-            return None
-        candidates = [
-            "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
-            "C:/Windows/Fonts/segoeui.ttf",
-            "C:/Windows/Fonts/segoeuib.ttf" if bold else None,
-        ]
-        for p in candidates:
-            if p and os.path.exists(p):
-                try:
-                    return ImageFont.truetype(p, size)
-                except Exception:
-                    pass
-        try:
-            return ImageFont.load_default()
-        except Exception:
-            return None
-
-    def _wrap_pillow(self, draw: 'ImageDraw.ImageDraw', text: str, font, max_width: int) -> List[str]:
-        words = text.split()
-        if not words:
-            return [""]
-        lines, line = [], words[0]
-        for w in words[1:]:
-            test = line + " " + w
-            if draw.textlength(test, font=font) <= max_width:
-                line = test
-            else:
-                lines.append(line); line = w
-        lines.append(line); return lines
 
     def _render_preview(self, code: str, description: str, scrap: bool = False):
         self.preview_canvas.delete("all")
         code_margin_px = int((CODE_SIDE_MARGIN_IN / LABEL_WIDTH_IN) * self.preview_w)
 
+        # If Pillow isn't available, draw a basic preview using Tk Canvas
         if Image is None:
-            # Fallback basic canvas drawing (no PIL)
+            # Code
             self.preview_canvas.create_text(
-                self.preview_w//2, 12, text=code, font=("Segoe UI", 36, "bold"),
+                self.preview_w//2, 12, text=code, font=("Times New Roman", 36, "bold"),
                 anchor="n", width=self.preview_w - 2*code_margin_px,
             )
             self.preview_canvas.create_line(code_margin_px, 70, self.preview_w - code_margin_px, 70, width=3)
             if scrap:
+                sec_text = "Regrind" if self.regrind_var.get() else "Scrap"
                 self.preview_canvas.create_text(
-                    self.preview_w//2, 88, text="Scrap", font=("Segoe UI", 36, "bold"),
+                    self.preview_w//2, 88, text=sec_text, font=("Times New Roman", 36, "bold"),
                     anchor="n", width=self.preview_w - 2*code_margin_px,
                 )
                 self.preview_canvas.create_line(code_margin_px, 146, self.preview_w - code_margin_px, 146, width=3)
             usable_w = int(self.preview_w * 0.88); x_center = self.preview_w//2
             y = int(self.preview_h * DESC_TOP_FRACTION)
             for ln in (description.splitlines() or [""]):
-                self.preview_canvas.create_text(x_center, y, text=ln, font=("Segoe UI", 24),
+                self.preview_canvas.create_text(x_center, y, text=ln, font=("Times New Roman", 24),
                                                 width=usable_w, anchor="n")
                 y += int(24 * DESC_LINE_SPACING)
             return
@@ -779,7 +848,7 @@ class App(tk.Tk):
         img = Image.new("RGB", (self.preview_w, self.preview_h), "white")
         d = ImageDraw.Draw(img)
 
-        # Fit code font width
+        # Fit code font width (Times Bold)
         start_guess = max(28, int(60 * (CODE_FONT_SIZE / 180.0)))
         code_font = self._pick_font(start_guess, bold=True)
         target_w = self.preview_w - 2 * code_margin_px
@@ -805,20 +874,20 @@ class App(tk.Tk):
         ul_left = max(code_margin_px, (self.preview_w - code_w) // 2)
         d.line([(ul_left, ul_y), (ul_left + code_w, ul_y)], width=px_ul_width)
 
-        # Optional SCRAP (same format as code)
+        # Optional SCRAP/REGRIND (same format as code)
         if scrap:
-            scrap_text = "Scrap"
-            scrap_font = code_font
-            scrap_bbox = d.textbbox((0, 0), scrap_text, font=scrap_font)
+            sec_text = "Regrind" if self.regrind_var.get() else "Scrap"
+            scrap_font = self._pick_font(code_font.size, bold=True)
+            scrap_bbox = d.textbbox((0, 0), sec_text, font=scrap_font)
             scrap_w, scrap_h = scrap_bbox[2] - scrap_bbox[0], scrap_bbox[3] - scrap_bbox[1]
             scrap_top = ul_y + px_gap
             scrap_left = max(code_margin_px, (self.preview_w - scrap_w) // 2)
-            d.text((scrap_left, scrap_top), scrap_text, font=scrap_font, fill="black")
+            d.text((scrap_left, scrap_top), sec_text, font=scrap_font, fill="black")
             scrap_ul_y = scrap_top + scrap_h + px_gap
             scrap_ul_left = max(code_margin_px, (self.preview_w - scrap_w) // 2)
             d.line([(scrap_ul_left, scrap_ul_y), (scrap_ul_left + scrap_w, scrap_ul_y)], width=px_ul_width)
 
-        # Description
+        # Description (Times Roman)
         lines: List[str] = []
         usable_w = int(self.preview_w * 0.88)
         desc_font = self._pick_font(32, bold=False)
@@ -835,6 +904,39 @@ class App(tk.Tk):
         self._preview_imgtk = ImageTk.PhotoImage(img)
         self.preview_canvas.create_image(0, 0, anchor="nw", image=self._preview_imgtk)
 
+    def _pick_font(self, size: int, bold: bool = False):
+        if ImageFont is None:
+            return None
+        # Prefer Times files on Windows for preview
+        candidates = [
+            "C:/Windows/Fonts/timesbd.ttf" if bold else "C:/Windows/Fonts/times.ttf",
+            "C:/Windows/Fonts/timesbi.ttf" if bold else "C:/Windows/Fonts/timesi.ttf",
+            "C:/Windows/Fonts/tnr.ttf",
+        ]
+        for p in candidates:
+            if p and os.path.exists(p):
+                try:
+                    return ImageFont.truetype(p, size)
+                except Exception:
+                    pass
+        try:
+            return ImageFont.load_default()
+        except Exception:
+            return None
+
+    def _wrap_pillow(self, draw: 'ImageDraw.ImageDraw', text: str, font, max_width: int) -> List[str]:
+        words = text.split()
+        if not words:
+            return [""]
+        lines, line = [], words[0]
+        for w in words[1:]:
+            test = line + " " + w
+            if draw.textlength(test, font=font) <= max_width:
+                line = test
+            else:
+                lines.append(line); line = w
+        lines.append(line); return lines
+
     # ---------- Sumatra (silent PDF printing) ----------
     def _find_sumatra(self) -> Optional[str]:
         cands = []
@@ -842,15 +944,15 @@ class App(tk.Tk):
             cands += [
                 _resource_path("assets/SumatraPDF-32.exe"),
                 _resource_path("assets/SumatraPDF.exe"),
-                r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe",
-                r"C:\Program Files\SumatraPDF\SumatraPDF.exe"
+                r"C:\\Program Files (x86)\\SumatraPDF\\SumatraPDF.exe",
+                r"C:\\Program Files\\SumatraPDF\\SumatraPDF.exe"
             ]
         else:
             cands += [
                 _resource_path("assets/SumatraPDF.exe"),
                 _resource_path("assets/SumatraPDF-32.exe"),
-                r"C:\Program Files\SumatraPDF\SumatraPDF.exe",
-                r"C:\Program Files (x86)\SumatraPDF\SumatraPDF.exe"
+                r"C:\\Program Files\\SumatraPDF\\SumatraPDF.exe",
+                r"C:\\Program Files (x86)\\SumatraPDF\\SumatraPDF.exe"
             ]
         for p in cands:
             if os.path.isfile(p):
@@ -928,10 +1030,15 @@ class App(tk.Tk):
         try:
             # Always wrap onto Letter so output is a single 8.5×11 page with centered 4×6 content
             host_wrap = True
+
+            # Propagate regrind state to renderer and decide whether to show secondary text
+            self.renderer.regrind_active = self.regrind_var.get()
+            show_secondary = (self.scrap_var.get() or self.regrind_var.get())
+
             self.renderer.render_pdf(
                 row.name, row.description, pdf_path,
                 host_wrap=host_wrap, host_name=HOST_PAPER_NAME, host_scale_mode=HOST_SCALE_MODE,
-                scrap=self.scrap_var.get(),
+                scrap=show_secondary,
             )
 
             # Use printer from UI (or fallbacks inside _silent_print_pdf)

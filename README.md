@@ -51,12 +51,17 @@ Built with **Python**, **Tkinter**, and **ReportLab**, with **silent PDF printin
  cd MVA-Label-Printing
  ```
 
-2. Install Python dependencies:
+2. Install dependencies:
   ```bash
 pip install reportlab pillow
+Download your desired porable verison of SumatraPDF
+Place it in the project folder with a folder inside /assets
+https://www.sumatrapdfreader.org/download-free-pdf-viewer
+
+place your desired banner also in /assets named Banner.png along with app icon in .ico format named app.ico
 ```
 
-3.Run The Program:
+3. Run The Program:
 ```bash
 python Material.py
 ```
