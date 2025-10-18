@@ -5,7 +5,8 @@
 - Regrind Button
 - Moved admin button
 - Mva logo
-- Updated interface 
+- Updated interface
+- Added one touch change to regrind and scrap buttons
 
 ### Changes
 - Dropdown box is now also searchable
@@ -14,6 +15,7 @@
 - Drop down menu automatically selects default printer
 - changed the font sans-serif typefaces for a cleaner look
 - Removed app name from applcation interface
+- Removed old Ctrl-P support
 
 ## [1.1.0] - 2025-09-28
 ### Added

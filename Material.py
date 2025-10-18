@@ -331,6 +331,7 @@ def _list_windows_printers() -> tuple[list[str], Optional[str]]:
     return printers, default_name
 
 # ---------- App ----------
+
 class App(tk.Tk):
     def __init__(self):
         _set_dpi_awareness()
@@ -353,7 +354,6 @@ class App(tk.Tk):
         self.printers: list[str] = []
         self.default_printer: Optional[str] = None
         self._build_ui()
-        self._bind_shortcuts()
         self._load_printers_into_ui()
         self._reload_labels()
 
@@ -428,25 +428,36 @@ class App(tk.Tk):
             fill=tk.X, padx=pad, pady=(6, pad)
         )
 
-    def _bind_shortcuts(self):
-        self.bind_all("<Control-p>", lambda e: self._print_selected())
-        self.bind_all("<Control-P>", lambda e: self._print_selected())
-
     def _refresh_scrap_button_text(self):
         self.scrap_btn.config(text=("☑ Scrap" if self.scrap_var.get() else "☐ Scrap"))
-
-    def _toggle_scrap(self):
-        self.scrap_var.set(not self.scrap_var.get())
-        self._refresh_scrap_button_text()
-        self._on_any_toggle()
 
     def _refresh_regrind_button_text(self):
         self.regrind_btn.config(text=("☑ Regrind" if self.regrind_var.get() else "☐ Regrind"))
 
-    def _toggle_regrind(self):
-        self.regrind_var.set(not self.regrind_var.get())
+    def _toggle_scrap(self):
+        # When Scrap is toggled on, turn off Regrind
+        currently_on = self.scrap_var.get()
+        self.scrap_var.set(not currently_on)
+
+        if self.scrap_var.get():
+            self.regrind_var.set(False)
+
+        self._refresh_scrap_button_text()
         self._refresh_regrind_button_text()
         self._on_any_toggle()
+
+    def _toggle_regrind(self):
+        # When Regrind is toggled on, turn off Scrap
+        currently_on = self.regrind_var.get()
+        self.regrind_var.set(not currently_on)
+
+        if self.regrind_var.get():
+            self.scrap_var.set(False)
+
+        self._refresh_regrind_button_text()
+        self._refresh_scrap_button_text()
+        self._on_any_toggle()
+
 
     def _on_any_toggle(self):
         name = (self.label_var.get() or "").strip()
@@ -974,4 +985,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
