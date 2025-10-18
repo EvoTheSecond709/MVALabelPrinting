@@ -56,7 +56,7 @@ Download your desired porable verison of SumatraPDF
 Place it in the project folder with a folder inside /assets
 https://www.sumatrapdfreader.org/download-free-pdf-viewer
 
-place your desired banner also in /assets named Banner.png
+place your desired banner in /assets named banner.png
 ```
 
 3. Run The Program:
