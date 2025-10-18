@@ -331,7 +331,6 @@ def _list_windows_printers() -> tuple[list[str], Optional[str]]:
     return printers, default_name
 
 # ---------- App ----------
-
 class App(tk.Tk):
     def __init__(self):
         _set_dpi_awareness()
