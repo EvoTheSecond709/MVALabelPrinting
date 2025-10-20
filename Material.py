@@ -610,6 +610,20 @@ class App(tk.Tk):
             self.preview_canvas.delete("all")
             self.status_var.set("No labels yet.")
 
+    # ---------- Helper to bring Admin Panel front ----------
+    def _bring_admin_panel_to_front(self):
+        """If the Admin Panel window exists, bring it to the top."""
+        for w in self.winfo_children():
+            if isinstance(w, tk.Toplevel) and "Admin Panel" in str(w.title()):
+                try:
+                    w.lift()
+                    w.focus_force()
+                    w.attributes("-topmost", True)
+                    w.after(300, lambda: w.attributes("-topmost", False))
+                except Exception:
+                    pass
+                break
+            
     def _on_material_search(self, event):
         text = self.label_var.get().strip().upper()
         if not text:
@@ -711,6 +725,7 @@ class App(tk.Tk):
     # (rest of your methods like _open_edit_label, _open_view_list, _open_bulk_import, etc.)
 
     # NEW: open edit window (same layout as Add), with optional callback to refresh list
+    # ---------- Edit Label ----------
     def _open_edit_label(self, row: LabelRow, after_save=None):
         win = tk.Toplevel(self)
         win.title(f"Edit Label — {row.name}")
@@ -737,10 +752,12 @@ class App(tk.Tk):
         btns = ttk.Frame(frm)
         btns.grid(row=4, column=0, sticky="e", pady=(12, 0))
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=(0, 8))
-        ttk.Button(btns, text="Save Changes",
-                   command=lambda: self._save_edit_label(row.id, code_var, desc_txt, win, after_save)).pack(side=tk.RIGHT)
+        ttk.Button(
+            btns,
+            text="Save Changes",
+            command=lambda: self._save_edit_label(row.id, code_var, desc_txt, win, after_save),
+        ).pack(side=tk.RIGHT)
 
-    # NEW: save edit and refresh combobox + optionally the list
     def _save_edit_label(self, id_: int, code_var, desc_txt, win, after_save=None):
         code = (code_var.get() or "").strip()
         desc = (desc_txt.get("1.0", tk.END) or "").strip()
@@ -765,7 +782,7 @@ class App(tk.Tk):
             messagebox.showinfo("Updated", f"Updated label: {code}")
             win.destroy()
 
-            # --- Bring the View / Delete Labels window back to front ---
+            # Bring the View/Delete window back to front if open
             if self.view_labels_win and self.view_labels_win.winfo_exists():
                 try:
                     self.view_labels_win.lift()
@@ -777,6 +794,7 @@ class App(tk.Tk):
         else:
             messagebox.showerror("Error", "Failed to update label.")
 
+    # ---------- View / Delete Labels ----------
     def _open_view_list(self):
         # If it's already open, bring it forward
         if self.view_labels_win and self.view_labels_win.winfo_exists():
@@ -798,10 +816,13 @@ class App(tk.Tk):
         _load_app_icon(win)
 
         def on_close():
+            """Destroy window and return to Admin Panel."""
             try:
                 win.destroy()
             finally:
                 self.view_labels_win = None
+                self.after(200, self._bring_admin_panel_to_front)
+
         win.protocol("WM_DELETE_WINDOW", on_close)
 
         outer = ttk.Frame(win, padding=12)
@@ -809,6 +830,7 @@ class App(tk.Tk):
 
         top = ttk.Frame(outer)
         top.pack(fill=tk.X, pady=(0, 8))
+
         ttk.Label(top, text="Filter:").pack(side=tk.LEFT)
         qvar = tk.StringVar()
         qentry = ttk.Entry(top, textvariable=qvar, width=50)
@@ -823,6 +845,7 @@ class App(tk.Tk):
         tree.column("Code", width=200, anchor="w")
         tree.column("Description", width=760, anchor="w")
         tree.pack(fill=tk.BOTH, expand=True)
+
         yscroll = ttk.Scrollbar(tree, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=yscroll.set)
         yscroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -861,18 +884,16 @@ class App(tk.Tk):
 
             deleted = self.db.delete_by_ids(ids)
             self._reload_labels()
-            refresh()  # <---- repopulate immediately after reload
+            refresh()
             self.status_var.set(f"Deleted {deleted} item(s).")
 
-            # --- Bring the View / Delete Labels window back to front ---
-            if self.view_labels_win and self.view_labels_win.winfo_exists():
-                try:
-                    self.view_labels_win.lift()
-                    self.view_labels_win.focus_force()
-                    self.view_labels_win.attributes("-topmost", True)
-                    self.view_labels_win.after(300, lambda: self.view_labels_win.attributes("-topmost", False))
-                except Exception:
-                    pass
+            try:
+                win.lift()
+                win.focus_force()
+                win.attributes("-topmost", True)
+                win.after(300, lambda: win.attributes("-topmost", False))
+            except Exception:
+                pass
 
         def on_key(event):
             if event.keysym == "Delete":
@@ -895,7 +916,7 @@ class App(tk.Tk):
         # Initial population
         refresh()
 
-
+    # ---------- Bulk Import Labels ----------
     def _open_bulk_import(self):
         win = tk.Toplevel(self)
         win.title("Bulk Import Labels")
@@ -903,12 +924,21 @@ class App(tk.Tk):
         win.grab_set()
         _load_app_icon(win)
 
+        def on_close():
+            """Destroy window and bring Admin Panel back to front."""
+            try:
+                win.destroy()
+            finally:
+                self.after(200, self._bring_admin_panel_to_front)
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
         outer = ttk.Frame(win, padding=12)
         outer.pack(fill=tk.BOTH, expand=True)
 
         ttk.Label(
             outer,
-            text="Paste lines like: VG0100 Description here"
+            text="Paste lines like: VG0100 Description here",
         ).pack(anchor="w", pady=(0, 6))
 
         txt = tk.Text(outer, wrap=tk.NONE, font=("sans-serif typefaces", 10))
@@ -917,12 +947,13 @@ class App(tk.Tk):
         ttk.Button(
             outer,
             text="Import",
-            command=lambda: do_import()
+            command=lambda: do_import(),
         ).pack(pady=10, anchor="e")
 
         def do_import():
             pairs = self._parse_bulk_lines(txt.get("1.0", tk.END))
-            added = skipped = 0
+            added = 0
+            skipped = 0
 
             for name, desc in pairs:
                 try:
@@ -933,21 +964,9 @@ class App(tk.Tk):
 
             self._reload_labels()
             messagebox.showinfo("Import done", f"Added: {added}, Skipped: {skipped}")
-            win.destroy()
+            on_close()
 
-            # --- Bring the Admin Panel back to the top ---
-            for w in self.winfo_children():
-                if isinstance(w, tk.Toplevel) and "Admin Panel" in str(w.title()):
-                    try:
-                        w.lift()
-                        w.focus_force()
-                        w.attributes("-topmost", True)
-                        w.after(300, lambda: w.attributes("-topmost", False))
-                    except Exception:
-                        pass
-                    break
-
-
+    # ---------- Bulk Parsing ----------
     def _parse_bulk_lines(self, blob: str) -> List[Tuple[str, str]]:
         pairs: List[Tuple[str, str]] = []
         for raw in blob.splitlines():
@@ -960,8 +979,7 @@ class App(tk.Tk):
                 code, rest = line, ""
             pairs.append((code.strip(), rest.strip()))
         return pairs
-
-
+        
     # ---- Preview ----
     def _on_selection(self):
         name = (self.label_var.get() or "").strip()
