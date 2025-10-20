@@ -163,6 +163,7 @@ class LabelDB:
             return cur.rowcount > 0
 
 # ---------- PDF Renderer ----------
+# ---------- PDF Renderer ----------
 class LabelRenderer:
     def __init__(self, width_in: float, height_in: float, margin_in: float):
         self.content_w_pt = int(width_in * inch)
@@ -183,7 +184,7 @@ class LabelRenderer:
             size -= 1
         return min_size
 
-    def _wrap_text(self, canv, text, font_name, font_size, max_width) -> List[str]:
+    def _wrap_text(self, canv, text, font_name, font_size, max_width) -> list[str]:
         words = text.replace("\r", "").split()
         if not words:
             return [""]
@@ -193,7 +194,8 @@ class LabelRenderer:
             if canv.stringWidth(test, font_name, font_size) <= max_width:
                 cur = test
             else:
-                lines.append(cur); cur = w
+                lines.append(cur)
+                cur = w
         lines.append(cur)
         return lines
 
@@ -212,65 +214,78 @@ class LabelRenderer:
             lines.extend(self._wrap_text(canv, raw, self.desc_font_name, MIN_DESC_FONT_SIZE, max_width))
         return MIN_DESC_FONT_SIZE, lines
 
-def _draw_label_content(self, c, code: str, description: str, scrap: bool = False):
-    w, h, m = self.content_w_pt, self.content_h_pt, self.margin_pt
+    def _draw_label_content(self, c, code: str, description: str, scrap: bool = False):
+        w, h, m = self.content_w_pt, self.content_h_pt, self.margin_pt
+        desc_empty = not description.strip()
 
-    # detect whether to center
-    desc_empty = not description.strip()
-
-    # Code font sizing
-    max_code_width = w - (2 * self.code_side_margin_pt)
-    code_size = self._fit_font(c, code, max_code_width, CODE_FONT_SIZE, min_size=28)
-    c.setFont(self.code_font_name, code_size)
-    code_text_width = c.stringWidth(code, self.code_font_name, code_size)
-    ascent = 0.80 * code_size
-
-    if desc_empty:
-        # Center vertically if no description
-        code_y = h / 2.0 + ascent / 2.0
-    else:
-        # Original top position
-        code_y = h - 1 - ascent
-
-    code_x = w / 2.0
-    c.drawCentredString(code_x, code_y, code)
-
-    # underline under code
-    underline_y = code_y - UNDERLINE_GAP_PT
-    c.setLineWidth(UNDERLINE_STROKE_PT)
-    c.line(code_x - code_text_width / 2.0, underline_y, code_x + code_text_width / 2.0, underline_y)
-
-    # Optional SCRAP/REGRIND (Times-Bold)
-    if scrap:
-        secondary_text = "Regrind" if self.regrind_active else "Scrap"
+        # Code font sizing
+        max_code_width = w - (2 * self.code_side_margin_pt)
+        code_size = self._fit_font(c, code, max_code_width, CODE_FONT_SIZE, min_size=28)
         c.setFont(self.code_font_name, code_size)
-        secondary_x = code_x
-        secondary_baseline = underline_y - (UNDERLINE_GAP_PT + 0.80 * code_size)
-        c.drawCentredString(secondary_x, secondary_baseline, secondary_text)
-        secondary_text_width = c.stringWidth(secondary_text, self.code_font_name, code_size)
-        secondary_ul_y = secondary_baseline - UNDERLINE_GAP_PT
-        c.line(secondary_x - secondary_text_width / 2.0, secondary_ul_y, secondary_x + secondary_text_width / 2.0, secondary_ul_y)
+        code_text_width = c.stringWidth(code, self.code_font_name, code_size)
+        ascent = 0.80 * code_size
 
-    # Description (only if present)
-    if not desc_empty:
-        block_w = w - 2 * m
-        max_desc_height = (h * DESC_TOP_FRACTION) - m
-        desc_size, lines = self._fit_paragraph(c, description, block_w, max_desc_height)
-        c.setFont(self.desc_font_name, desc_size)
-        line_h = desc_size * DESC_LINE_SPACING
-        cur_y = h * DESC_TOP_FRACTION
-        for ln in lines:
-            if DESC_ALIGN_CENTER:
-                c.drawCentredString(w/2.0, cur_y, ln)
-            else:
-                c.drawString(m, cur_y, ln)
-            cur_y -= line_h
+        # Positioning for code text
+        if desc_empty:
+            code_y = h / 2.0 + ascent / 2.0
+        else:
+            code_y = h - 1 - ascent
 
-    def render_pdf(self, code: str, description: str, out_path: str, host_wrap: bool, host_name: str, host_scale_mode: str, scrap: bool = False):
+        code_x = w / 2.0
+        c.drawCentredString(code_x, code_y, code)
+
+        # underline under code
+        underline_y = code_y - UNDERLINE_GAP_PT
+        c.setLineWidth(UNDERLINE_STROKE_PT)
+        c.line(code_x - code_text_width / 2.0, underline_y, code_x + code_text_width / 2.0, underline_y)
+
+        # Optional SCRAP/REGRIND text
+        if scrap:
+            secondary_text = "Regrind" if self.regrind_active else "Scrap"
+            c.setFont(self.code_font_name, code_size)
+            secondary_x = code_x
+            secondary_baseline = underline_y - (UNDERLINE_GAP_PT + 0.80 * code_size)
+            c.drawCentredString(secondary_x, secondary_baseline, secondary_text)
+            secondary_text_width = c.stringWidth(secondary_text, self.code_font_name, code_size)
+            secondary_ul_y = secondary_baseline - UNDERLINE_GAP_PT
+            c.line(
+                secondary_x - secondary_text_width / 2.0,
+                secondary_ul_y,
+                secondary_x + secondary_text_width / 2.0,
+                secondary_ul_y,
+            )
+
+        # Description (only if present)
+        if not desc_empty:
+            block_w = w - 2 * m
+            max_desc_height = (h * DESC_TOP_FRACTION) - m
+            desc_size, lines = self._fit_paragraph(c, description, block_w, max_desc_height)
+            c.setFont(self.desc_font_name, desc_size)
+            line_h = desc_size * DESC_LINE_SPACING
+            cur_y = h * DESC_TOP_FRACTION
+            for ln in lines:
+                if DESC_ALIGN_CENTER:
+                    c.drawCentredString(w / 2.0, cur_y, ln)
+                else:
+                    c.drawString(m, cur_y, ln)
+                cur_y -= line_h
+
+    def render_pdf(
+        self,
+        code: str,
+        description: str,
+        out_path: str,
+        host_wrap: bool,
+        host_name: str,
+        host_scale_mode: str,
+        scrap: bool = False,
+    ):
         if not host_wrap:
             c = pdfcanvas.Canvas(out_path, pagesize=(self.content_w_pt, self.content_h_pt))
             self._draw_label_content(c, code, description, scrap=scrap)
-            c.showPage(); c.save(); return
+            c.showPage()
+            c.save()
+            return
 
         # Host wrap: draw the 4×6 content centered on a Letter page
         host_w, host_h = HOST_PAPER_SIZES.get(host_name, HOST_PAPER_SIZES["Letter"])
@@ -283,25 +298,33 @@ def _draw_label_content(self, c, code: str, description: str, scrap: bool = Fals
         def best_fit(unrotated: bool):
             if unrotated:
                 s = min(avail_w / cw, avail_h / ch) if host_scale_mode == "fit" else 1.0
-                return s, (host_w - cw*s)/2.0, (host_h - ch*s)/2.0, cw*s, ch*s
+                return s, (host_w - cw * s) / 2.0, (host_h - ch * s) / 2.0, cw * s, ch * s
             else:
                 s = min(avail_w / ch, avail_h / cw) if host_scale_mode == "fit" else 1.0
-                return s, (host_w - ch*s)/2.0, (host_h - cw*s)/2.0, ch*s, cw*s
+                return s, (host_w - ch * s) / 2.0, (host_h - cw * s) / 2.0, ch * s, cw * s
 
         s0, x0, y0, w0, h0 = best_fit(True)
         s1, x1, y1, w1, h1 = best_fit(False)
         rotate = (w1 * h1) > (w0 * h0)
 
         if not rotate:
-            c.saveState(); c.translate(x0, y0); c.scale(s0, s0)
+            c.saveState()
+            c.translate(x0, y0)
+            c.scale(s0, s0)
             self._draw_label_content(c, code, description, scrap=scrap)
             c.restoreState()
         else:
-            c.saveState(); c.translate(x1, y1); c.rotate(90); c.translate(0, -cw * s1); c.scale(s1, s1)
+            c.saveState()
+            c.translate(x1, y1)
+            c.rotate(90)
+            c.translate(0, -cw * s1)
+            c.scale(s1, s1)
             self._draw_label_content(c, code, description, scrap=scrap)
             c.restoreState()
 
-        c.showPage(); c.save()
+        c.showPage()
+        c.save()
+
 
 # ---------- Helpers: DPI, AppID, Icon ----------
 def _set_dpi_awareness():
@@ -1212,6 +1235,7 @@ class App(tk.Tk):
         name = (self.label_var.get() or "").strip()
         if not name:
             return
+
         copies = max(1, int(self.copies_var.get() or 1))
         row = self.db.get_label_by_name(name)
         if not row:
@@ -1228,38 +1252,58 @@ class App(tk.Tk):
             self.renderer.regrind_active = self.regrind_var.get()
             show_secondary = (self.scrap_var.get() or self.regrind_var.get())
 
+            # Generate the label PDF
             self.renderer.render_pdf(
-                row.name, row.description, pdf_path,
-                host_wrap=host_wrap, host_name=HOST_PAPER_NAME, host_scale_mode=HOST_SCALE_MODE,
+                row.name,
+                row.description,
+                pdf_path,
+                host_wrap=host_wrap,
+                host_name=HOST_PAPER_NAME,
+                host_scale_mode=HOST_SCALE_MODE,
                 scrap=show_secondary,
             )
 
-            # Use printer from UI (or fallbacks inside _silent_print_pdf)
+            # Use printer from UI (or fallback inside _silent_print_pdf)
             selected_printer = (self.printer_var.get() or "").strip()
             sent = self._silent_print_pdf(pdf_path, copies, selected_printer)
             if not sent:
-                try: os.remove(pdf_path)
-                except Exception: pass
+                try:
+                    os.remove(pdf_path)
+                except Exception:
+                    pass
                 return
 
+            # Clean up temporary PDF after a short delay
             def _cleanup():
                 deadline = time.time() + max(PERSIST_PDF_SECONDS, 25)
                 while time.time() < deadline:
                     try:
-                        os.remove(pdf_path); return
+                        os.remove(pdf_path)
+                        return
                     except Exception:
                         time.sleep(1.5)
-                try: os.remove(pdf_path)
-                except Exception: pass
+                try:
+                    os.remove(pdf_path)
+                except Exception:
+                    pass
 
             threading.Timer(25, _cleanup).start()
+
             used_printer = selected_printer or SUMATRA_PRINTER_NAME or "(system default)"
-            self.status_var.set(f"Sent to printer [{used_printer}] (Letter page via Sumatra, silent).")
+            self.status_var.set(
+                f"Sent to printer [{used_printer}] (Letter page via Sumatra, silent)."
+            )
+
+            # ✅ Reset copies to 1 after successful print
+            self.copies_var.set(1)
+            self.copies_spin.update_idletasks()
 
         except Exception as e:
             messagebox.showerror("Print error", f"Failed to print: {e}")
-            try: os.remove(pdf_path)
-            except Exception: pass
+            try:
+                os.remove(pdf_path)
+            except Exception:
+                pass
 
 # ---------- main ----------
 def main():
