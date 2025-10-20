@@ -98,16 +98,14 @@ class LabelDB:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         with self._connect() as con:
             cur = con.cursor()
-            cur.execute(
-                """
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS labels (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
                     description TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 )
-                """
-            )
+            """)
             con.commit()
 
     def add_label(self, name: str, description: str) -> int:
@@ -115,15 +113,25 @@ class LabelDB:
             cur = con.cursor()
             cur.execute(
                 "INSERT INTO labels(name, description, created_at) VALUES(?,?,?)",
-                (name.strip(), description.strip(), datetime.datetime.now().isoformat(timespec="seconds")),
+                (name.strip(), description.strip(), datetime.datetime.now().isoformat(timespec='seconds')),
             )
             con.commit()
             return cur.lastrowid
 
     def get_all_labels(self) -> List[LabelRow]:
+        """Return all labels, sorting code-only entries (no description) first."""
         with self._connect() as con:
             cur = con.cursor()
-            cur.execute("SELECT id, name, description, created_at FROM labels ORDER BY name COLLATE NOCASE ASC")
+            cur.execute("""
+                SELECT id, name, description, created_at
+                FROM labels
+                ORDER BY
+                    CASE
+                        WHEN TRIM(description) = '' THEN 0
+                        ELSE 1
+                    END,
+                    name COLLATE NOCASE ASC
+            """)
             rows = cur.fetchall()
             return [LabelRow(*r) for r in rows]
 
