@@ -431,28 +431,25 @@ class App(tk.Tk):
         self.db = LabelDB(DB_PATH)
         self.renderer = LabelRenderer(LABEL_WIDTH_IN, LABEL_HEIGHT_IN, MARGIN_IN)
 
-        # UI state vars
+        # --- UI state ---
         self.label_var = tk.StringVar()
         self.copies_var = tk.IntVar(value=1)
-        self.scrap_var = tk.BooleanVar(value=False)   # logical state for scrap
-        self.regrind_var = tk.BooleanVar(value=False) # logical state for regrind
-        self.printer_var = tk.StringVar()             # selected printer name
+        self.scrap_var = tk.BooleanVar(value=False)
+        self.regrind_var = tk.BooleanVar(value=False)
+        self.printer_var = tk.StringVar()
         self.printers: list[str] = []
         self.default_printer: Optional[str] = None
-
+        self.view_labels_win: Optional[tk.Toplevel] = None
         self._build_ui()
-
-        # Load printers (Windows only); harmless on other OS
         self._load_printers_into_ui()
-
         self._reload_labels()
 
+    # ---------- Style ----------
     def _apply_style(self, style: ttk.Style):
         try:
             style.theme_use("clam")
         except Exception:
             pass
-        # Base fonts to generic family label (UI only)
         base_font = ("sans-serif typefaces", 11)
         base_font_b = ("sans-serif typefaces", 11, "bold")
         style.configure("TFrame", padding=0, background="#f3f3f3")
@@ -461,105 +458,105 @@ class App(tk.Tk):
         style.configure("Treeview.Heading", font=base_font_b)
         style.configure("Card.TLabelframe", background="#ffffff")
         style.configure("Card.TLabelframe.Label", font=base_font_b, background="#ffffff")
-        style.configure("Status.TLabel", foreground="#555", background="#f3f3f3", font=("sans-serif typefaces", 10))
+        style.configure("Status.TLabel", foreground="#555", background="#f3f3f3",
+                        font=("sans-serif typefaces", 10))
         style.configure("TButton", font=base_font, padding=(10, 6))
         style.map("TButton", relief=[("active", "groove")])
         style.configure("TEntry", padding=4)
         style.configure("TCombobox", padding=4)
-        # Flat pill-style toggles
         style.configure("Scrap.TButton", padding=(8, 2), font=base_font)
 
+    # ---------- Build main UI ----------
     def _build_ui(self):
         pad = 12
-
-        # ----- Header line: Title (left), Banner (center on Canvas), Admin (right) -----
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=pad, pady=(pad, 8))
 
-        # Canvas for banner (center)
-        banner_canvas = tk.Canvas(header, width=600, height=80, bg="#f3f3f3", highlightthickness=0)
+        banner_canvas = tk.Canvas(header, width=600, height=80,
+                                  bg="#f3f3f3", highlightthickness=0)
         banner_canvas.pack(side=tk.LEFT, expand=True, padx=10)
 
         banner_path = _resource_path("assets/banner.png")
         if os.path.exists(banner_path):
             banner_img = tk.PhotoImage(file=banner_path)
-            banner_canvas.banner_img = banner_img  # prevent garbage collection
+            banner_canvas.banner_img = banner_img
             banner_canvas.create_image(300, 40, image=banner_img, anchor="center")
         else:
             messagebox.showwarning("Banner Missing", f"Couldn't find: {banner_path}")
 
-        # Right Admin button
-        ttk.Button(header, text="Admin", command=self._admin_login).pack(side=tk.RIGHT, padx=(0, 10))
+        ttk.Button(header, text="Admin",
+                   command=self._admin_login).pack(side=tk.RIGHT, padx=(0, 10))
 
-        # ----- Top control bar -----
         top = ttk.Frame(self)
         top.pack(fill=tk.X, padx=pad, pady=(0, 10))
 
-        # Material
         ttk.Label(top, text="Material:").pack(side=tk.LEFT, padx=(0, 6))
-        self.combo = ttk.Combobox(top, textvariable=self.label_var, state="normal", width=30)
+        self.combo = ttk.Combobox(top, textvariable=self.label_var,
+                                  state="normal", width=30)
         self.combo.pack(side=tk.LEFT, padx=(0, 10))
         self.combo.bind("<Return>", self._on_material_search)
         self.combo.bind("<<ComboboxSelected>>", lambda e: self._on_selection())
 
-        # Copies
         ttk.Label(top, text="Copies:").pack(side=tk.LEFT)
         self.copies_spin = ttk.Spinbox(top, from_=1, to=999, width=5,
-                                       textvariable=self.copies_var, justify="center")
+                                       textvariable=self.copies_var,
+                                       justify="center")
         self.copies_spin.pack(side=tk.LEFT, padx=(6, 12))
 
-        # Scrap toggle
-        self.scrap_btn = ttk.Button(top, style="Scrap.TButton", command=self._toggle_scrap)
+        self.scrap_btn = ttk.Button(top, style="Scrap.TButton",
+                                    command=self._toggle_scrap)
         self._refresh_scrap_button_text()
         self.scrap_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        # Regrind toggle
-        self.regrind_btn = ttk.Button(top, style="Scrap.TButton", command=self._toggle_regrind)
+        self.regrind_btn = ttk.Button(top, style="Scrap.TButton",
+                                      command=self._toggle_regrind)
         self._refresh_regrind_button_text()
         self.regrind_btn.pack(side=tk.LEFT, padx=(0, 14))
 
-        # Print
-        ttk.Button(top, text="Print", command=self._print_selected).pack(side=tk.LEFT, padx=(0, 50))
+        ttk.Button(top, text="Print",
+                   command=self._print_selected).pack(side=tk.LEFT, padx=(0, 50))
 
-        # Printer dropdown (Windows)
         ttk.Label(top, text="Printer:").pack(side=tk.LEFT)
-        self.printer_combo = ttk.Combobox(top, textvariable=self.printer_var, state="readonly", width=34)
+        self.printer_combo = ttk.Combobox(top, textvariable=self.printer_var,
+                                          state="readonly", width=34)
         self.printer_combo.pack(side=tk.LEFT, padx=(6, 14))
 
-        # ----- Preview and right panel -----
         mid = ttk.Frame(self)
         mid.pack(fill=tk.BOTH, expand=True, padx=pad, pady=0)
 
-        prev_card = ttk.Labelframe(mid, text="Print Preview", style="Card.TLabelframe")
-        prev_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 10), pady=(0, 8))
+        prev_card = ttk.Labelframe(mid, text="Print Preview",
+                                   style="Card.TLabelframe")
+        prev_card.pack(side=tk.LEFT, fill=tk.BOTH, expand=False,
+                       padx=(0, 10), pady=(0, 8))
         prev_frame = ttk.Frame(prev_card)
         prev_frame.pack(padx=10, pady=10)
         self.preview_w, self.preview_h = 380, 570
-        self.preview_canvas = tk.Canvas(prev_frame, width=self.preview_w, height=self.preview_h, bg="white",
-                                        highlightthickness=1, highlightbackground="#ddd")
+        self.preview_canvas = tk.Canvas(prev_frame, width=self.preview_w,
+                                        height=self.preview_h, bg="white",
+                                        highlightthickness=1,
+                                        highlightbackground="#ddd")
         self.preview_canvas.pack()
 
         right = ttk.Frame(mid)
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=(0, 8))
-        # (future right-pane content)
 
         self.status_var = tk.StringVar(value="Ready.")
-        ttk.Label(self, textvariable=self.status_var, anchor="w", style="Status.TLabel").pack(
-            fill=tk.X, padx=pad, pady=(6, pad)
-        )
+        ttk.Label(self, textvariable=self.status_var, anchor="w",
+                  style="Status.TLabel").pack(fill=tk.X, padx=pad, pady=(6, pad))
 
-    # ----- Scrap control helpers -----
+    # ---------- Scrap/Regrind controls ----------
     def _refresh_scrap_button_text(self):
-        self.scrap_btn.config(text=("☑ Scrap" if self.scrap_var.get() else "☐ Scrap"))
+        self.scrap_btn.config(
+            text=("☑ Scrap" if self.scrap_var.get() else "☐ Scrap"))
 
     def _toggle_scrap(self):
         self.scrap_var.set(not self.scrap_var.get())
         self._refresh_scrap_button_text()
         self._on_any_toggle()
 
-    # ----- Regrind control helpers -----
     def _refresh_regrind_button_text(self):
-        self.regrind_btn.config(text=("☑ Regrind" if self.regrind_var.get() else "☐ Regrind"))
+        self.regrind_btn.config(
+            text=("☑ Regrind" if self.regrind_var.get() else "☐ Regrind"))
 
     def _toggle_regrind(self):
         self.regrind_var.set(not self.regrind_var.get())
@@ -572,29 +569,26 @@ class App(tk.Tk):
             return
         row = self.db.get_label_by_name(name)
         if row:
-            # Propagate regrind state to renderer and preview
             self.renderer.regrind_active = self.regrind_var.get()
             self._render_preview(
-                row.name,
-                row.description,
+                row.name, row.description,
                 scrap=(self.scrap_var.get() or self.regrind_var.get())
             )
 
-    # ----- Printer discovery & UI -----
+    # ---------- Printer Discovery ----------
     def _load_printers_into_ui(self):
         printers, default_name = _list_windows_printers()
         self.printers = printers
         self.default_printer = default_name
-
         if printers:
             self.printer_combo["values"] = tuple(printers)
             initial = default_name or SUMATRA_PRINTER_NAME or printers[0]
             self.printer_var.set(initial)
         else:
             self.printer_combo["values"] = ()
-            self.printer_var.set("")  # use default when printing
+            self.printer_var.set("")
 
-    # ----- Data ops -----
+    # ---------- Data Operations ----------
     def _reload_labels(self):
         rows = self.db.get_all_labels()
         names = [r.name for r in rows]
@@ -607,32 +601,27 @@ class App(tk.Tk):
             self.combo.set("")
             self.preview_canvas.delete("all")
             self.status_var.set("No labels yet.")
-#------ Testing -------
+
     def _on_material_search(self, event):
-        # Allow user typing in the combo
         text = self.label_var.get().strip().upper()
         if not text:
             return
-
+        import re
         def normalize(s: str) -> str:
-            import re
             match = re.match(r"([A-Za-z]+)0*(\d+)", s)
-            if match:
-                prefix, digits = match.groups()
-                return f"{prefix}{int(digits)}"  # remove leading zeros
-            return s
-
-        # Find the first label that matches ignoring leading zeros
+            return f"{match.group(1)}{int(match.group(2))}" if match else s
         for name in self.combo["values"]:
             if normalize(name.upper()) == normalize(text):
                 self.combo.set(name)
                 self._on_selection()
                 return
-    # ----- Admin -----
+
+    # ---------- Admin ----------
     def _admin_login(self):
-        pw = simpledialog.askstring("Admin Login", "Enter admin password:", show='*', parent=self)
+        pw = simpledialog.askstring("Admin Login", "Enter admin password:",
+                                    show='*', parent=self)
         if pw is None:
-            return  # user canceled
+            return
         entered = hashlib.sha256(pw.encode("utf-8")).hexdigest()
         if hmac.compare_digest(entered, ADMIN_PASSWORD_HASH):
             self._open_admin_panel()
@@ -640,60 +629,108 @@ class App(tk.Tk):
             messagebox.showerror("Access denied", "Incorrect password.")
 
     def _open_admin_panel(self):
-        win = tk.Toplevel(self); win.title("Admin Panel"); win.geometry("400x320"); win.grab_set(); _load_app_icon(win)
-        frm = ttk.Frame(win, padding=12); frm.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(frm, text="Admin actions", font=("sans-serif typefaces", 12, "bold")).pack(anchor="w", pady=(0, 8))
-        ttk.Button(frm, text="Add Single Label", command=self._open_add_single).pack(fill=tk.X, pady=6)
-        ttk.Button(frm, text="View / Delete Labels", command=self._open_view_list).pack(fill=tk.X, pady=6)
-        ttk.Button(frm, text="Bulk Import Labels", command=self._open_bulk_import).pack(fill=tk.X, pady=6)
+        win = tk.Toplevel(self)
+        win.title("Admin Panel")
+        win.geometry("400x320")
+        win.grab_set()
+        _load_app_icon(win)
+
+        frm = ttk.Frame(win, padding=12)
+        frm.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(frm, text="Admin actions",
+                  font=("sans-serif typefaces", 12, "bold")).pack(anchor="w", pady=(0, 8))
+        ttk.Button(frm, text="Add Single Label",
+                   command=self._open_add_single).pack(fill=tk.X, pady=6)
+        ttk.Button(frm, text="View / Delete Labels",
+                   command=self._open_view_list).pack(fill=tk.X, pady=6)
+        ttk.Button(frm, text="Bulk Import Labels",
+                   command=self._open_bulk_import).pack(fill=tk.X, pady=6)
 
     def _open_add_single(self):
-        win = tk.Toplevel(self); win.title("Add Single Label"); win.geometry("560x380"); win.grab_set(); _load_app_icon(win)
-        frm = ttk.Frame(win, padding=12); frm.pack(fill=tk.BOTH, expand=True)
+        win = tk.Toplevel(self)
+        win.title("Add Single Label")
+        win.geometry("560x380")
+        win.grab_set()
+        _load_app_icon(win)
+
+        frm = ttk.Frame(win, padding=12)
+        frm.pack(fill=tk.BOTH, expand=True)
+
         ttk.Label(frm, text="Label code (e.g., VG0100)").grid(row=0, column=0, sticky="w")
-        code_var = tk.StringVar(); code_entry = ttk.Entry(frm, textvariable=code_var, width=44)
-        code_entry.grid(row=1, column=0, sticky="we", pady=(0,10)); code_entry.focus_set()
+        code_var = tk.StringVar()
+        code_entry = ttk.Entry(frm, textvariable=code_var, width=44)
+        code_entry.grid(row=1, column=0, sticky="we", pady=(0, 10))
+        code_entry.focus_set()
+
         ttk.Label(frm, text="Description (multi-line)").grid(row=2, column=0, sticky="w")
-        desc_txt = tk.Text(frm, height=10, wrap=tk.WORD, font=("sans-serif typefaces", 10))
-        desc_txt.grid(row=3, column=0, sticky="nsew"); frm.rowconfigure(3, weight=1); frm.columnconfigure(0, weight=1)
-        btns = ttk.Frame(frm); btns.grid(row=4, column=0, sticky="e", pady=(12,0))
-        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=(0,8))
-        ttk.Button(btns, text="Save", command=lambda: self._save_single(code_var, desc_txt, win)).pack(side=tk.RIGHT)
+        desc_txt = tk.Text(frm, height=10, wrap=tk.WORD,
+                           font=("sans-serif typefaces", 10))
+        desc_txt.grid(row=3, column=0, sticky="nsew")
+        frm.rowconfigure(3, weight=1)
+        frm.columnconfigure(0, weight=1)
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=4, column=0, sticky="e", pady=(12, 0))
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(btns, text="Save",
+                   command=lambda: self._save_single(code_var, desc_txt, win)).pack(side=tk.RIGHT)
 
     def _save_single(self, code_var, desc_txt, win):
         code = (code_var.get() or "").strip()
         desc = (desc_txt.get("1.0", tk.END) or "").strip()
-
         if not code:
             messagebox.showwarning("Required", "Please enter a label code.")
             return
-
-        # Allow blank description; empty string is valid
         try:
             self.db.add_label(code, desc)
         except sqlite3.IntegrityError:
             messagebox.showerror("Duplicate", f"A label named '{code}' already exists.")
             return
-
         self._reload_labels()
         messagebox.showinfo("Saved", f"Added label: {code}")
         win.destroy()
+        for w in self.winfo_children():
+            if isinstance(w, tk.Toplevel) and "Admin Panel" in str(w.title()):
+                try:
+                    w.lift()
+                    w.focus_force()
+                    w.attributes("-topmost", True)
+                    w.after(300, lambda: w.attributes("-topmost", False))
+                except Exception:
+                    pass
+                break
+
+    # (rest of your methods like _open_edit_label, _open_view_list, _open_bulk_import, etc.)
 
     # NEW: open edit window (same layout as Add), with optional callback to refresh list
     def _open_edit_label(self, row: LabelRow, after_save=None):
-        win = tk.Toplevel(self); win.title(f"Edit Label — {row.name}"); win.geometry("560x380"); win.grab_set(); _load_app_icon(win)
-        frm = ttk.Frame(win, padding=12); frm.pack(fill=tk.BOTH, expand=True)
+        win = tk.Toplevel(self)
+        win.title(f"Edit Label — {row.name}")
+        win.geometry("560x380")
+        win.grab_set()
+        _load_app_icon(win)
+
+        frm = ttk.Frame(win, padding=12)
+        frm.pack(fill=tk.BOTH, expand=True)
+
         ttk.Label(frm, text="Label code (e.g., VG0100)").grid(row=0, column=0, sticky="w")
         code_var = tk.StringVar(value=row.name)
         code_entry = ttk.Entry(frm, textvariable=code_var, width=44)
-        code_entry.grid(row=1, column=0, sticky="we", pady=(0,10)); code_entry.focus_set()
+        code_entry.grid(row=1, column=0, sticky="we", pady=(0, 10))
+        code_entry.focus_set()
+
         ttk.Label(frm, text="Description (multi-line)").grid(row=2, column=0, sticky="w")
         desc_txt = tk.Text(frm, height=10, wrap=tk.WORD, font=("sans-serif typefaces", 10))
-        desc_txt.grid(row=3, column=0, sticky="nsew"); frm.rowconfigure(3, weight=1); frm.columnconfigure(0, weight=1)
+        desc_txt.grid(row=3, column=0, sticky="nsew")
+        frm.rowconfigure(3, weight=1)
+        frm.columnconfigure(0, weight=1)
         desc_txt.insert("1.0", row.description)
-        btns = ttk.Frame(frm); btns.grid(row=4, column=0, sticky="e", pady=(12,0))
-        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=(0,8))
-        ttk.Button(btns, text="Save Changes", command=lambda: self._save_edit_label(row.id, code_var, desc_txt, win, after_save)).pack(side=tk.RIGHT)
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=4, column=0, sticky="e", pady=(12, 0))
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Button(btns, text="Save Changes",
+                   command=lambda: self._save_edit_label(row.id, code_var, desc_txt, win, after_save)).pack(side=tk.RIGHT)
 
     # NEW: save edit and refresh combobox + optionally the list
     def _save_edit_label(self, id_: int, code_var, desc_txt, win, after_save=None):
@@ -704,7 +741,6 @@ class App(tk.Tk):
             messagebox.showwarning("Required", "Please enter a label code.")
             return
 
-        # Allow blank description; store empty string if missing
         try:
             updated = self.db.update_label(id_, code, desc)
         except sqlite3.IntegrityError:
@@ -720,29 +756,71 @@ class App(tk.Tk):
                     pass
             messagebox.showinfo("Updated", f"Updated label: {code}")
             win.destroy()
+
+            # --- Bring the View / Delete Labels window back to front ---
+            if self.view_labels_win and self.view_labels_win.winfo_exists():
+                try:
+                    self.view_labels_win.lift()
+                    self.view_labels_win.focus_force()
+                    self.view_labels_win.attributes("-topmost", True)
+                    self.view_labels_win.after(300, lambda: self.view_labels_win.attributes("-topmost", False))
+                except Exception:
+                    pass
         else:
             messagebox.showerror("Error", "Failed to update label.")
 
-
     def _open_view_list(self):
-        win = tk.Toplevel(self); win.title("Current Labels — View / Delete"); win.geometry("1000x640"); win.grab_set(); _load_app_icon(win)
-        outer = ttk.Frame(win, padding=12); outer.pack(fill=tk.BOTH, expand=True)
+        # If it's already open, bring it forward
+        if self.view_labels_win and self.view_labels_win.winfo_exists():
+            try:
+                self.view_labels_win.deiconify()
+                self.view_labels_win.lift()
+                self.view_labels_win.focus_force()
+                self.view_labels_win.attributes("-topmost", True)
+                self.view_labels_win.after(300, lambda: self.view_labels_win.attributes("-topmost", False))
+            except Exception:
+                pass
+            return
 
-        top = ttk.Frame(outer); top.pack(fill=tk.X, pady=(0,8))
+        win = tk.Toplevel(self)
+        self.view_labels_win = win
+        win.title("Current Labels — View / Delete")
+        win.geometry("1000x640")
+        win.grab_set()
+        _load_app_icon(win)
+
+        def on_close():
+            try:
+                win.destroy()
+            finally:
+                self.view_labels_win = None
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+        outer = ttk.Frame(win, padding=12)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        top = ttk.Frame(outer)
+        top.pack(fill=tk.X, pady=(0, 8))
         ttk.Label(top, text="Filter:").pack(side=tk.LEFT)
-        qvar = tk.StringVar(); qentry = ttk.Entry(top, textvariable=qvar, width=50); qentry.pack(side=tk.LEFT, padx=6)
+        qvar = tk.StringVar()
+        qentry = ttk.Entry(top, textvariable=qvar, width=50)
+        qentry.pack(side=tk.LEFT, padx=6)
         ttk.Button(top, text="Search", command=lambda: refresh()).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(top, text="Delete Selected", command=lambda: delete_selected()).pack(side=tk.LEFT, padx=(12, 0))
 
         cols = ("Code", "Description")
         tree = ttk.Treeview(outer, columns=cols, show="headings", selectmode="extended")
-        tree.heading("Code", text="Code"); tree.heading("Description", text="Description")
-        tree.column("Code", width=200, anchor="w"); tree.column("Description", width=760, anchor="w")
+        tree.heading("Code", text="Code")
+        tree.heading("Description", text="Description")
+        tree.column("Code", width=200, anchor="w")
+        tree.column("Description", width=760, anchor="w")
         tree.pack(fill=tk.BOTH, expand=True)
         yscroll = ttk.Scrollbar(tree, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=yscroll.set); yscroll.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.configure(yscrollcommand=yscroll.set)
+        yscroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         def refresh():
+            """Repopulate the list based on current filter text."""
             for row in tree.get_children():
                 tree.delete(row)
             q = (qvar.get() or "").lower()
@@ -754,7 +832,9 @@ class App(tk.Tk):
         def delete_selected():
             sel = tree.selection()
             if not sel:
-                messagebox.showinfo("Nothing selected", "Select one or more rows to delete."); return
+                messagebox.showinfo("Nothing selected", "Select one or more rows to delete.")
+                return
+
             ids = []
             for iid in sel:
                 try:
@@ -762,21 +842,35 @@ class App(tk.Tk):
                 except ValueError:
                     vals = tree.item(iid, "values")
                     if vals:
-                        name = str(vals[0]).strip(); row = self.db.get_label_by_name(name)
+                        name = str(vals[0]).strip()
+                        row = self.db.get_label_by_name(name)
                         if row:
                             ids.append(row.id)
+
             label = f"these {len(ids)} labels" if len(ids) > 1 else "this label"
             if not messagebox.askyesno("Confirm delete", f"Permanently delete {label}? This cannot be undone."):
                 return
+
             deleted = self.db.delete_by_ids(ids)
-            refresh(); self._reload_labels(); self.status_var.set(f"Deleted {deleted} item(s).")
+            self._reload_labels()
+            refresh()  # <---- repopulate immediately after reload
+            self.status_var.set(f"Deleted {deleted} item(s).")
+
+            # --- Bring the View / Delete Labels window back to front ---
+            if self.view_labels_win and self.view_labels_win.winfo_exists():
+                try:
+                    self.view_labels_win.lift()
+                    self.view_labels_win.focus_force()
+                    self.view_labels_win.attributes("-topmost", True)
+                    self.view_labels_win.after(300, lambda: self.view_labels_win.attributes("-topmost", False))
+                except Exception:
+                    pass
 
         def on_key(event):
             if event.keysym == "Delete":
                 delete_selected()
         tree.bind("<Key>", on_key)
 
-        # NEW: double-click to edit
         def on_double_click(event):
             item = tree.identify_row(event.y)
             if not item:
@@ -790,26 +884,61 @@ class App(tk.Tk):
                 self._open_edit_label(row, after_save=refresh)
         tree.bind("<Double-1>", on_double_click)
 
+        # Initial population
         refresh()
 
+
     def _open_bulk_import(self):
-        win = tk.Toplevel(self); win.title("Bulk Import Labels"); win.geometry("780x560"); win.grab_set(); _load_app_icon(win)
-        outer = ttk.Frame(win, padding=12); outer.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(outer, text="Paste lines like: VG0100 Description here").pack(anchor="w", pady=(0,6))
-        txt = tk.Text(outer, wrap=tk.NONE, font=("sans-serif typefaces", 10)); txt.pack(fill=tk.BOTH, expand=True)
-        ttk.Button(outer, text="Import", command=lambda: do_import()).pack(pady=10, anchor="e")
+        win = tk.Toplevel(self)
+        win.title("Bulk Import Labels")
+        win.geometry("780x560")
+        win.grab_set()
+        _load_app_icon(win)
+
+        outer = ttk.Frame(win, padding=12)
+        outer.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(
+            outer,
+            text="Paste lines like: VG0100 Description here"
+        ).pack(anchor="w", pady=(0, 6))
+
+        txt = tk.Text(outer, wrap=tk.NONE, font=("sans-serif typefaces", 10))
+        txt.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Button(
+            outer,
+            text="Import",
+            command=lambda: do_import()
+        ).pack(pady=10, anchor="e")
 
         def do_import():
             pairs = self._parse_bulk_lines(txt.get("1.0", tk.END))
             added = skipped = 0
+
             for name, desc in pairs:
                 try:
-                    self.db.add_label(name, desc); added += 1
+                    self.db.add_label(name, desc)
+                    added += 1
                 except sqlite3.IntegrityError:
                     skipped += 1
+
             self._reload_labels()
             messagebox.showinfo("Import done", f"Added: {added}, Skipped: {skipped}")
             win.destroy()
+
+            # --- Bring the Admin Panel back to the top ---
+            for w in self.winfo_children():
+                if isinstance(w, tk.Toplevel) and "Admin Panel" in str(w.title()):
+                    try:
+                        w.lift()
+                        w.focus_force()
+                        w.attributes("-topmost", True)
+                        w.after(300, lambda: w.attributes("-topmost", False))
+                    except Exception:
+                        pass
+                    break
+
 
     def _parse_bulk_lines(self, blob: str) -> List[Tuple[str, str]]:
         pairs: List[Tuple[str, str]] = []
@@ -823,6 +952,7 @@ class App(tk.Tk):
                 code, rest = line, ""
             pairs.append((code.strip(), rest.strip()))
         return pairs
+
 
     # ---- Preview ----
     def _on_selection(self):
